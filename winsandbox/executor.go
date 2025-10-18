@@ -195,11 +195,13 @@ func (s *Sandbox) IsRunning() bool {
 
 	// Check if process is still alive
 	if s.cmd == nil || s.cmd.Process == nil {
+		s.started = false
 		return false
 	}
 
-	// Try to find the process (this is platform-specific)
-	// For simplicity, we'll just return the started flag
+	// On Unix systems, we can check if process exists without blocking
+	// On Windows, Process.Signal(syscall.Signal(0)) is not reliable
+	// So we rely on the started flag which is updated by the goroutine in Start()
 	return s.started
 }
 
