@@ -39,13 +39,16 @@ func TestCommandContext(t *testing.T) {
 }
 
 func TestCommandContextNil(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("Expected panic with nil context")
-		}
-	}()
+	// CommandContext should handle nil context gracefully by using background context
+	cmd := CommandContext(nil, "echo", "test")
 
-	CommandContext(nil, "echo", "test")
+	if cmd.ctx == nil {
+		t.Error("Context should not be nil, expected background context")
+	}
+
+	if cmd.Path != "echo" {
+		t.Errorf("Expected Path to be 'echo', got '%s'", cmd.Path)
+	}
 }
 
 func TestCmdString(t *testing.T) {

@@ -85,6 +85,8 @@ type Cmd struct {
 // The returned Cmd's Args field is constructed from the command name
 // followed by the elements of arg, so arg should not include the
 // command name itself.
+//
+// If name is empty, Command returns a Cmd that will fail when started.
 func Command(name string, arg ...string) *Cmd {
 	cmd := &Cmd{
 		Path: name,
@@ -97,11 +99,14 @@ func Command(name string, arg ...string) *Cmd {
 //
 // The provided context is used to kill the process (by killing the sandbox)
 // if the context becomes done before the command completes on its own.
+//
+// If ctx is nil, CommandContext returns a Cmd with a background context.
+// This is safer than panicking and maintains backward compatibility.
 func CommandContext(ctx context.Context, name string, arg ...string) *Cmd {
-	if ctx == nil {
-		panic("nil Context")
-	}
 	cmd := Command(name, arg...)
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	cmd.ctx = ctx
 	return cmd
 }
@@ -123,9 +128,12 @@ func (c *Cmd) String() string {
 // copying stdin, stdout, and stderr, and exits with a zero exit status.
 func (c *Cmd) Run() error {
 	if err := c.Start(); err != nil {
-		return err
+		return fmt.Errorf("failed to start command: %w", err)
 	}
-	return c.Wait()
+	if err := c.Wait(); err != nil {
+		return fmt.Errorf("command execution failed: %w", err)
+	}
+	return nil
 }
 
 // Start starts the specified command in a Windows Sandbox but does not wait for it to complete.
@@ -135,6 +143,11 @@ func (c *Cmd) Run() error {
 func (c *Cmd) Start() error {
 	if c.finished {
 		return fmt.Errorf("command already executed")
+	}
+
+	// Validate that Path or Args is set
+	if c.Path == "" && len(c.Args) == 0 {
+		return fmt.Errorf("no command specified")
 	}
 
 	// Create context if not provided
@@ -162,16 +175,22 @@ func (c *Cmd) Start() error {
 	}
 	c.tempDir = tempDir
 
+	// Setup cleanup on error
+	var cleanupOnError = true
+	defer func() {
+		if cleanupOnError {
+			os.RemoveAll(tempDir)
+		}
+	}()
+
 	// Write stdin data if provided
 	if c.Stdin != nil {
 		c.stdinFile = filepath.Join(tempDir, "stdin.txt")
 		stdinData, err := io.ReadAll(c.Stdin)
 		if err != nil {
-			os.RemoveAll(tempDir)
 			return fmt.Errorf("failed to read stdin: %w", err)
 		}
 		if err := os.WriteFile(c.stdinFile, stdinData, 0644); err != nil {
-			os.RemoveAll(tempDir)
 			return fmt.Errorf("failed to write stdin file: %w", err)
 		}
 	}
@@ -179,7 +198,6 @@ func (c *Cmd) Start() error {
 	// Write script to temp file
 	scriptPath := filepath.Join(tempDir, "script.ps1")
 	if err := os.WriteFile(scriptPath, []byte(script), 0644); err != nil {
-		os.RemoveAll(tempDir)
 		return fmt.Errorf("failed to write script: %w", err)
 	}
 
@@ -220,6 +238,9 @@ func (c *Cmd) Start() error {
 		return fmt.Errorf("failed to start sandbox: %w", err)
 	}
 
+	// Disable cleanup on error since Start was successful
+	cleanupOnError = false
+
 	// Monitor context cancellation
 	go func() {
 		<-c.ctx.Done()
@@ -243,15 +264,29 @@ func (c *Cmd) Wait() error {
 		return fmt.Errorf("command not started")
 	}
 
+	// Ensure cleanup happens regardless of errors
+	defer func() {
+		c.finished = true
+
+		// Cancel context
+		if c.cancel != nil {
+			c.cancel()
+		}
+
+		// Clean up sandbox
+		if c.sandbox != nil {
+			c.sandbox.Stop()
+		}
+
+		// Clean up temporary directory
+		if c.tempDir != "" {
+			os.RemoveAll(c.tempDir)
+			c.tempDir = ""
+		}
+	}()
+
 	// Wait for sandbox to exit
 	err := c.sandbox.Wait()
-
-	c.finished = true
-
-	// Cancel context
-	if c.cancel != nil {
-		c.cancel()
-	}
 
 	// Read output files and write to Stdout/Stderr
 	if c.Stdout != nil && c.outputFile != "" {
@@ -270,17 +305,6 @@ func (c *Cmd) Wait() error {
 		}
 	}
 
-	// Clean up sandbox
-	if c.sandbox != nil {
-		c.sandbox.Stop()
-	}
-
-	// Clean up temporary directory
-	if c.tempDir != "" {
-		os.RemoveAll(c.tempDir)
-		c.tempDir = ""
-	}
-
 	if c.err != nil {
 		return c.err
 	}
@@ -292,7 +316,7 @@ func (c *Cmd) Wait() error {
 // Any returned error will usually be of type *exec.ExitError.
 func (c *Cmd) Output() ([]byte, error) {
 	if c.Stdout != nil {
-		return nil, fmt.Errorf("Stdout already set")
+		return nil, fmt.Errorf("Cmd.Stdout already set")
 	}
 	var stdout bytes.Buffer
 	c.Stdout = &stdout
@@ -305,10 +329,10 @@ func (c *Cmd) Output() ([]byte, error) {
 // output and standard error.
 func (c *Cmd) CombinedOutput() ([]byte, error) {
 	if c.Stdout != nil {
-		return nil, fmt.Errorf("Stdout already set")
+		return nil, fmt.Errorf("Cmd.Stdout already set")
 	}
 	if c.Stderr != nil {
-		return nil, fmt.Errorf("Stderr already set")
+		return nil, fmt.Errorf("Cmd.Stderr already set")
 	}
 	var b bytes.Buffer
 	c.Stdout = &b
@@ -322,7 +346,7 @@ func (c *Cmd) CombinedOutput() ([]byte, error) {
 // The pipe will be closed automatically after Wait sees the command exit.
 func (c *Cmd) StdinPipe() (io.WriteCloser, error) {
 	if c.Stdin != nil {
-		return nil, fmt.Errorf("Stdin already set")
+		return nil, fmt.Errorf("Cmd.Stdin already set")
 	}
 	pr, pw := io.Pipe()
 	c.Stdin = pr
@@ -337,7 +361,7 @@ func (c *Cmd) StdinPipe() (io.WriteCloser, error) {
 // before all reads from the pipe have completed.
 func (c *Cmd) StdoutPipe() (io.ReadCloser, error) {
 	if c.Stdout != nil {
-		return nil, fmt.Errorf("Stdout already set")
+		return nil, fmt.Errorf("Cmd.Stdout already set")
 	}
 	pr, pw := io.Pipe()
 	c.Stdout = pw
@@ -352,17 +376,28 @@ func (c *Cmd) StdoutPipe() (io.ReadCloser, error) {
 // before all reads from the pipe have completed.
 func (c *Cmd) StderrPipe() (io.ReadCloser, error) {
 	if c.Stderr != nil {
-		return nil, fmt.Errorf("Stderr already set")
+		return nil, fmt.Errorf("Cmd.Stderr already set")
 	}
 	pr, pw := io.Pipe()
 	c.Stderr = pw
 	return pr, nil
 }
 
-// buildScript creates the PowerShell script to execute the command
+// buildScript creates the PowerShell script to execute the command in the sandbox.
+//
+// The script performs the following operations:
+// 1. Sets the working directory if c.Dir is specified
+// 2. Configures environment variables from c.Env
+// 3. Reads stdin from a file if c.Stdin is provided
+// 4. Executes the command with proper argument quoting
+// 5. Captures stdout, stderr, and exit code to files
+// 6. Handles errors gracefully
+//
+// The generated script uses PowerShell's error handling to ensure robust execution
+// and proper output capture even if the command fails.
 func (c *Cmd) buildScript() (string, error) {
 	if len(c.Args) == 0 && c.Path == "" {
-		return "", fmt.Errorf("no command specified")
+		return "", fmt.Errorf("no command specified: both Args and Path are empty")
 	}
 
 	// Use exec.Command to properly quote arguments
