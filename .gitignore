@@ -7,6 +7,8 @@
 *.dll
 *.so
 *.dylib
+advanced
+basic
 
 # Example binaries
 examples/*/basic
