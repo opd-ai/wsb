@@ -10,7 +10,8 @@ import (
 
 func main() {
 	fmt.Println("Windows Sandbox Advanced Example")
-	fmt.Println("==================================\n")
+	fmt.Println("==================================")
+	fmt.Println()
 
 	// Check if sandbox is installed
 	if err := winsandbox.QuickStart(); err != nil {

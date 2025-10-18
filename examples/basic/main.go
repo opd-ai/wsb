@@ -9,7 +9,8 @@ import (
 
 func main() {
 	fmt.Println("Windows Sandbox Basic Example")
-	fmt.Println("==============================\n")
+	fmt.Println("==============================")
+	fmt.Println()
 
 	// Check OS compatibility
 	fmt.Println("Checking OS compatibility...")
