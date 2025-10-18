@@ -11,6 +11,7 @@ Windows Sandbox is a Windows 10/11 feature that provides isolated desktop enviro
 - **Feature Installation**: Detect and install Windows Sandbox feature via PowerShell
 - **Configuration Management**: Generate valid .wsb (XML) configuration files with full feature support
 - **Sandbox Execution**: Launch Windows Sandbox with custom configurations
+- **Command Execution**: Execute commands in Windows Sandbox with an API similar to os/exec
 - **Error Handling**: Comprehensive error types with actionable messages
 - **Type Safety**: Strongly-typed configuration with validation
 
@@ -218,6 +219,161 @@ if err != nil {
 }
 ```
 
+## Command Execution API (os/exec-like)
+
+The package provides a command execution API similar to Go's `os/exec` package for running commands inside Windows Sandbox instances.
+
+### Basic Command Execution
+
+```go
+// Create a command
+cmd := winsandbox.Command("cmd.exe", "/c", "echo", "Hello from sandbox!")
+
+// Execute and get output
+output, err := cmd.Output()
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println(string(output))
+```
+
+### Command with Environment Variables
+
+```go
+cmd := winsandbox.Command("cmd.exe", "/c", "echo", "%MY_VAR%")
+cmd.Env = []string{"MY_VAR=Hello World"}
+
+output, err := cmd.Output()
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+### Command with Working Directory
+
+```go
+cmd := winsandbox.Command("cmd.exe", "/c", "dir")
+cmd.Dir = "C:\\Windows\\System32"
+
+output, err := cmd.Output()
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+### Command with Context and Timeout
+
+```go
+// With timeout
+cmd := winsandbox.Command("long-running-program.exe")
+cmd.Timeout = 30 * time.Second
+err := cmd.Run()
+
+// With context
+ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+defer cancel()
+
+cmd := winsandbox.CommandContext(ctx, "program.exe", "arg1", "arg2")
+err := cmd.Run()
+```
+
+### Custom Configuration
+
+```go
+cmd := winsandbox.Command("powershell.exe", "-Command", "Get-Process")
+
+// Use custom sandbox configuration
+config := winsandbox.NewDefaultConfig()
+config.Networking = winsandbox.NetworkingEnable
+config.VGpu = winsandbox.VGpuEnable
+cmd.Config = config
+
+output, err := cmd.Output()
+```
+
+### Separate Stdout and Stderr
+
+```go
+var stdout, stderr bytes.Buffer
+
+cmd := winsandbox.Command("program.exe")
+cmd.Stdout = &stdout
+cmd.Stderr = &stderr
+
+err := cmd.Run()
+if err != nil {
+    log.Printf("Error: %v\nStderr: %s", err, stderr.String())
+}
+fmt.Printf("Stdout: %s\n", stdout.String())
+```
+
+### Using Pipes
+
+```go
+// Stdin pipe
+cmd := winsandbox.Command("sort.exe")
+stdin, err := cmd.StdinPipe()
+if err != nil {
+    log.Fatal(err)
+}
+
+go func() {
+    defer stdin.Close()
+    io.WriteString(stdin, "zebra\napple\nbanana\n")
+}()
+
+output, err := cmd.Output()
+
+// Stdout pipe
+cmd := winsandbox.Command("program.exe")
+stdout, err := cmd.StdoutPipe()
+if err != nil {
+    log.Fatal(err)
+}
+
+if err := cmd.Start(); err != nil {
+    log.Fatal(err)
+}
+
+// Read from stdout as it's being produced
+scanner := bufio.NewScanner(stdout)
+for scanner.Scan() {
+    fmt.Println(scanner.Text())
+}
+
+cmd.Wait()
+```
+
+### Start and Wait Pattern
+
+```go
+cmd := winsandbox.Command("program.exe")
+
+// Start the command but don't wait
+if err := cmd.Start(); err != nil {
+    log.Fatal(err)
+}
+
+// Do other work...
+
+// Wait for the command to complete
+if err := cmd.Wait(); err != nil {
+    log.Fatal(err)
+}
+```
+
+### Combined Output
+
+```go
+// Get both stdout and stderr together
+cmd := winsandbox.Command("program.exe")
+output, err := cmd.CombinedOutput()
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println(string(output))
+```
+
 ## Complete Example
 
 ```go
@@ -323,6 +479,7 @@ Full API documentation is available at [pkg.go.dev](https://pkg.go.dev/github.co
 
 - `Config`: Configuration for Windows Sandbox instance
 - `Sandbox`: Represents a running Windows Sandbox instance
+- `Cmd`: Represents a command to be executed in Windows Sandbox (similar to os/exec.Cmd)
 - `MappedFolder`: Folder mapping between host and sandbox
 - `LogonCommand`: Command to execute on sandbox startup
 
@@ -334,6 +491,8 @@ Full API documentation is available at [pkg.go.dev](https://pkg.go.dev/github.co
 - `CheckOSCompatibility() error`: Verify OS supports Windows Sandbox
 - `NewDefaultConfig() *Config`: Create default configuration
 - `New(config *Config) (*Sandbox, error)`: Create new sandbox instance
+- `Command(name string, arg ...string) *Cmd`: Create a command to run in sandbox
+- `CommandContext(ctx context.Context, name string, arg ...string) *Cmd`: Create a command with context
 
 ## Testing
 
