@@ -58,6 +58,10 @@ type Cmd struct {
 	// outputFile is the temporary file used to capture output
 	outputFile string
 	errorFile  string
+	stdinFile  string
+
+	// tempDir holds the temporary directory for this command
+	tempDir string
 
 	// ctx is the context for the command
 	ctx    context.Context
@@ -156,10 +160,26 @@ func (c *Cmd) Start() error {
 	if err != nil {
 		return fmt.Errorf("failed to create temp directory: %w", err)
 	}
+	c.tempDir = tempDir
+
+	// Write stdin data if provided
+	if c.Stdin != nil {
+		c.stdinFile = filepath.Join(tempDir, "stdin.txt")
+		stdinData, err := io.ReadAll(c.Stdin)
+		if err != nil {
+			os.RemoveAll(tempDir)
+			return fmt.Errorf("failed to read stdin: %w", err)
+		}
+		if err := os.WriteFile(c.stdinFile, stdinData, 0644); err != nil {
+			os.RemoveAll(tempDir)
+			return fmt.Errorf("failed to write stdin file: %w", err)
+		}
+	}
 
 	// Write script to temp file
 	scriptPath := filepath.Join(tempDir, "script.ps1")
 	if err := os.WriteFile(scriptPath, []byte(script), 0644); err != nil {
+		os.RemoveAll(tempDir)
 		return fmt.Errorf("failed to write script: %w", err)
 	}
 
@@ -236,19 +256,29 @@ func (c *Cmd) Wait() error {
 	// Read output files and write to Stdout/Stderr
 	if c.Stdout != nil && c.outputFile != "" {
 		if data, readErr := os.ReadFile(c.outputFile); readErr == nil {
-			c.Stdout.Write(data)
+			if _, writeErr := c.Stdout.Write(data); writeErr != nil && err == nil {
+				err = fmt.Errorf("failed to write stdout: %w", writeErr)
+			}
 		}
 	}
 
 	if c.Stderr != nil && c.errorFile != "" {
 		if data, readErr := os.ReadFile(c.errorFile); readErr == nil {
-			c.Stderr.Write(data)
+			if _, writeErr := c.Stderr.Write(data); writeErr != nil && err == nil {
+				err = fmt.Errorf("failed to write stderr: %w", writeErr)
+			}
 		}
 	}
 
 	// Clean up sandbox
 	if c.sandbox != nil {
 		c.sandbox.Stop()
+	}
+
+	// Clean up temporary directory
+	if c.tempDir != "" {
+		os.RemoveAll(c.tempDir)
+		c.tempDir = ""
 	}
 
 	if c.err != nil {
@@ -375,9 +405,7 @@ func (c *Cmd) buildScript() (string, error) {
 	stdinPath := ""
 	if c.Stdin != nil {
 		stdinPath = "C:\\WSBCmd\\stdin.txt"
-		// Note: stdin handling would require writing the content to a file
-		// in the temp directory during Start(). For now, we note this limitation.
-		script.WriteString(fmt.Sprintf("$stdin = Get-Content '%s' -Raw\n", stdinPath))
+		// stdin.txt will be created in Start() and mapped to the sandbox
 	}
 
 	// Build the command execution
@@ -385,7 +413,13 @@ func (c *Cmd) buildScript() (string, error) {
 	script.WriteString("try {\n")
 
 	if stdinPath != "" {
-		script.WriteString(fmt.Sprintf("    $output = %s | Out-String\n", cmdLine))
+		// Read stdin from file and pipe to command
+		script.WriteString(fmt.Sprintf("    $stdinContent = Get-Content '%s' -Raw -ErrorAction SilentlyContinue\n", stdinPath))
+		script.WriteString(fmt.Sprintf("    if ($stdinContent) {\n"))
+		script.WriteString(fmt.Sprintf("        $output = $stdinContent | & %s 2>&1 | Out-String\n", cmdLine))
+		script.WriteString(fmt.Sprintf("    } else {\n"))
+		script.WriteString(fmt.Sprintf("        $output = & %s 2>&1 | Out-String\n", cmdLine))
+		script.WriteString(fmt.Sprintf("    }\n"))
 	} else {
 		script.WriteString(fmt.Sprintf("    $output = & %s 2>&1 | Out-String\n", cmdLine))
 	}

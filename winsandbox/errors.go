@@ -1,3 +1,6 @@
+// Package winsandbox provides error types for Windows Sandbox operations.
+// These error types provide specific context about failures that can occur
+// during Windows Sandbox feature management and sandbox execution.
 package winsandbox
 
 import "fmt"

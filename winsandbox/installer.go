@@ -180,7 +180,9 @@ func Install() error {
 			}
 		}
 	case <-time.After(5 * time.Minute):
-		cmd.Process.Kill()
+		if cmd.Process != nil {
+			cmd.Process.Kill()
+		}
 		return fmt.Errorf("installation timed out after 5 minutes")
 	}
 

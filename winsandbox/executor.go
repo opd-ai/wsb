@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"time"
 )
 
@@ -19,6 +20,7 @@ type Sandbox struct {
 	ctx        context.Context
 	cancel     context.CancelFunc
 	started    bool
+	mu         sync.Mutex // protects started flag
 }
 
 // New creates a new Sandbox instance with the given configuration
@@ -53,9 +55,12 @@ func New(config *Config) (*Sandbox, error) {
 
 // Start launches the Windows Sandbox with the configured settings
 func (s *Sandbox) Start() error {
+	s.mu.Lock()
 	if s.started {
+		s.mu.Unlock()
 		return fmt.Errorf("sandbox is already running")
 	}
+	s.mu.Unlock()
 
 	// Create temporary config file
 	tempDir := os.TempDir()
@@ -94,7 +99,9 @@ func (s *Sandbox) Start() error {
 		}
 	}
 
+	s.mu.Lock()
 	s.started = true
+	s.mu.Unlock()
 
 	// Wait a moment for the sandbox to initialize
 	time.Sleep(2 * time.Second)
@@ -105,7 +112,9 @@ func (s *Sandbox) Start() error {
 		// We can't reliably check if it failed immediately without waiting for it to exit
 		go func() {
 			s.cmd.Wait()
+			s.mu.Lock()
 			s.started = false
+			s.mu.Unlock()
 		}()
 	}
 
@@ -116,7 +125,11 @@ func (s *Sandbox) Start() error {
 // Note: This is a simplified implementation. True command execution inside sandbox
 // requires more complex inter-process communication or using LogonCommand in config
 func (s *Sandbox) Execute(command string) (stdout, stderr string, err error) {
-	if !s.started {
+	s.mu.Lock()
+	running := s.started
+	s.mu.Unlock()
+
+	if !running {
 		return "", "", fmt.Errorf("sandbox is not running")
 	}
 
@@ -128,9 +141,12 @@ func (s *Sandbox) Execute(command string) (stdout, stderr string, err error) {
 
 // Stop gracefully shuts down the Windows Sandbox
 func (s *Sandbox) Stop() error {
+	s.mu.Lock()
 	if !s.started {
+		s.mu.Unlock()
 		return nil
 	}
+	s.mu.Unlock()
 
 	// Cancel the context to signal shutdown
 	if s.cancel != nil {
@@ -155,7 +171,9 @@ func (s *Sandbox) Stop() error {
 		}
 	}
 
+	s.mu.Lock()
 	s.started = false
+	s.mu.Unlock()
 
 	// Clean up temporary config file
 	if s.configPath != "" {
@@ -168,6 +186,9 @@ func (s *Sandbox) Stop() error {
 
 // IsRunning returns true if the sandbox is currently running
 func (s *Sandbox) IsRunning() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if !s.started {
 		return false
 	}
@@ -184,11 +205,16 @@ func (s *Sandbox) IsRunning() bool {
 
 // Wait waits for the sandbox to exit and returns any error
 func (s *Sandbox) Wait() error {
-	if !s.started || s.cmd == nil {
+	s.mu.Lock()
+	started := s.started
+	cmd := s.cmd
+	s.mu.Unlock()
+
+	if !started || cmd == nil {
 		return fmt.Errorf("sandbox is not running")
 	}
 
-	return s.cmd.Wait()
+	return cmd.Wait()
 }
 
 // GetConfigPath returns the path to the temporary configuration file
