@@ -527,3 +527,9 @@ MIT License - see [LICENSE](LICENSE) file for details
 
 This package wraps the Windows Sandbox feature provided by Microsoft. For more information about Windows Sandbox, visit the [official documentation](https://docs.microsoft.com/en-us/windows/security/threat-protection/windows-sandbox/windows-sandbox-overview).
 
+
+Donate Monero(The only good cryptocurrency) to support development
+==================================================================
+
+ - `monero:43H3Uqnc9rfEsJjUXZYmam45MbtWmREFSANAWY5hijY4aht8cqYaT2BCNhfBhua5XwNdx9Tb6BEdt4tjUHJDwNW5H7mTiwe`
+
